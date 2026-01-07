@@ -1,78 +1,110 @@
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
+import os
 import shutil
 
 app = FastAPI()
 
+BASE_DIR = "storage"
+os.makedirs(BASE_DIR, exist_ok=True)
 
-def get_storage():
-    total, used, free = shutil.disk_usage("/")
-    total_gb = total / (1024 ** 3)
-    used_gb = used / (1024 ** 3)
-    percent = (used / total) * 100
 
-    return round(used_gb, 1), round(total_gb, 1), round(percent)
+def list_items():
+    items = []
+    for name in os.listdir(BASE_DIR):
+        path = os.path.join(BASE_DIR, name)
+        items.append({
+            "name": name,
+            "is_dir": os.path.isdir(path)
+        })
+    return items
 
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    used, total, percent = get_storage()
+    items = list_items()
+
+    items_html = ""
+    for item in items:
+        if item["is_dir"]:
+            items_html += f"""
+            <div class="flex items-center gap-2 text-gray-700">
+                📁 <span>{item['name']}</span>
+            </div>
+            """
+        else:
+            items_html += f"""
+            <a href="/download/{item['name']}"
+               class="flex items-center gap-2 text-blue-600 hover:underline">
+                📄 {item['name']}
+            </a>
+            """
 
     return f"""
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Storage Status</title>
-
-    <!-- Tailwind CDN -->
+    <title>Storage Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
-
-    <!-- Material Icons -->
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
-
-    <script>
-        tailwind.config = {{
-            theme: {{
-                extend: {{
-                    colors: {{
-                        primary: '#6366f1'
-                    }}
-                }}
-            }}
-        }}
-    </script>
 </head>
 
-<body class="bg-white min-h-screen flex items-center justify-center">
+<body class="bg-gray-100 min-h-screen flex items-center justify-center">
 
-    <div class="mt-4 bg-[#101622] text-white p-5 rounded-xl relative overflow-hidden group w-80 shadow-xl">
-        
-        <div class="absolute right-0 top-0 opacity-10 -mr-4 -mt-4 transform rotate-12
-                    group-hover:scale-110 transition-transform duration-500">
-            <span class="material-symbols-outlined text-[120px]">
-                cloud_queue
-            </span>
-        </div>
+<div class="bg-white p-6 rounded-xl shadow-lg w-[420px] space-y-4">
 
-        <h3 class="font-bold text-lg relative z-10">Storage Status</h3>
-        <p class="text-gray-400 text-sm mb-4 relative z-10">
-            Media Library Usage
-        </p>
+    <h2 class="text-xl font-bold text-center">📦 Storage Manager</h2>
 
-        <div class="w-full bg-gray-700 rounded-full h-2 mb-2 relative z-10">
-            <div class="bg-primary h-2 rounded-full transition-all duration-700"
-                 style="width: {percent}%">
-            </div>
-        </div>
+    <!-- Upload -->
+    <form action="/upload" method="post" enctype="multipart/form-data"
+          class="flex gap-2">
+        <input type="file" name="file" required
+               class="border rounded w-full px-2 py-1">
+        <button class="bg-blue-600 text-white px-3 rounded">
+            Upload
+        </button>
+    </form>
 
-        <div class="flex justify-between text-xs text-gray-400 relative z-10">
-            <span>{used} GB used</span>
-            <span>{total} GB total</span>
-        </div>
+    <!-- Create Folder -->
+    <form action="/mkdir" method="post" class="flex gap-2">
+        <input type="text" name="folder" placeholder="New folder name" required
+               class="border rounded w-full px-2 py-1">
+        <button class="bg-green-600 text-white px-3 rounded">
+            Create
+        </button>
+    </form>
 
+    <hr>
+
+    <!-- File List -->
+    <div class="space-y-2 max-h-48 overflow-y-auto">
+        {items_html if items_html else "<p class='text-gray-400'>No files yet</p>"}
     </div>
+
+</div>
 
 </body>
 </html>
 """
+
+
+@app.post("/upload")
+async def upload(file: UploadFile = File(...)):
+    path = os.path.join(BASE_DIR, file.filename)
+    with open(path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/mkdir")
+def make_dir(folder: str = Form(...)):
+    safe_name = folder.replace("/", "").replace("..", "")
+    os.makedirs(os.path.join(BASE_DIR, safe_name), exist_ok=True)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/download/{filename}")
+def download(filename: str):
+    path = os.path.join(BASE_DIR, filename)
+    if os.path.isfile(path):
+        return FileResponse(path, filename=filename)
+    return RedirectResponse("/")
